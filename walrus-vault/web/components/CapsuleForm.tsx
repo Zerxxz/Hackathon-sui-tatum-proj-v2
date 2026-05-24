@@ -6,14 +6,14 @@
 //   3. Uploads the ciphertext to Walrus
 //   4. Sends a Move tx that creates the Capsule with blob_id + key + unlock time
 //
-// The wallet signs the Move tx via @mysten/dapp-kit. The encryption key is
-// stored in the on-chain object as raw bytes for the MVP — see lib/crypto.ts
-// and the Move contract for the security note.
+// On success we surface the new capsule's object id so the user can copy a
+// shareable link to /capsule/[id].
 
 import {
   useCurrentAccount,
   useSignAndExecuteTransaction,
 } from "@mysten/dapp-kit";
+import Link from "next/link";
 import { useState } from "react";
 import { encrypt, exportKey, generateKey } from "@/lib/crypto";
 import { storeBlob } from "@/lib/walrus";
@@ -24,7 +24,7 @@ type Status =
   | { kind: "encrypting" }
   | { kind: "uploading" }
   | { kind: "signing" }
-  | { kind: "done"; digest: string }
+  | { kind: "done"; digest: string; capsuleId: string | null }
   | { kind: "error"; message: string };
 
 export function CapsuleForm() {
@@ -47,6 +47,14 @@ export function CapsuleForm() {
       setStatus({ kind: "error", message: "Pick a file to seal." });
       return;
     }
+    const unlockMs = new Date(unlockAt).getTime();
+    if (Number.isNaN(unlockMs) || unlockMs <= Date.now()) {
+      setStatus({
+        kind: "error",
+        message: "Unlock time must be in the future.",
+      });
+      return;
+    }
 
     try {
       // 1. Encrypt
@@ -62,7 +70,6 @@ export function CapsuleForm() {
 
       // 3. Build & sign tx
       setStatus({ kind: "signing" });
-      const unlockMs = new Date(unlockAt).getTime();
       const tx = buildCreateCapsuleTx({
         recipient: recipient || account.address,
         blobId,
@@ -71,8 +78,15 @@ export function CapsuleForm() {
         title,
       });
 
-      const result = await signAndExecute({ transaction: tx });
-      setStatus({ kind: "done", digest: result.digest });
+      const result = await signAndExecute({
+        transaction: tx,
+      });
+
+      // dapp-kit returns the digest synchronously, but to find the new
+      // object id we need to look up the tx with objectChanges. We do
+      // that lazily; if it fails we still show the digest.
+      const capsuleId = await tryFindCapsuleId(result.digest);
+      setStatus({ kind: "done", digest: result.digest, capsuleId });
     } catch (err) {
       setStatus({
         kind: "error",
@@ -126,10 +140,14 @@ export function CapsuleForm() {
 
       <button
         type="submit"
-        disabled={status.kind !== "idle" && status.kind !== "error"}
+        disabled={
+          status.kind !== "idle" &&
+          status.kind !== "error" &&
+          status.kind !== "done"
+        }
         className="rounded-lg bg-ocean-600 px-6 py-3 font-medium text-white transition hover:bg-ocean-900 disabled:opacity-60"
       >
-        {status.kind === "idle" || status.kind === "error"
+        {status.kind === "idle" || status.kind === "error" || status.kind === "done"
           ? "Seal capsule"
           : "Sealing…"}
       </button>
@@ -137,6 +155,34 @@ export function CapsuleForm() {
       <StatusBanner status={status} />
     </form>
   );
+}
+
+async function tryFindCapsuleId(digest: string): Promise<string | null> {
+  try {
+    // We deliberately use a fresh fetch instead of pulling the SuiClient
+    // here to keep this helper small. Any failure is non-fatal because
+    // the user can still copy the digest and look up the tx manually.
+    const url = process.env.NEXT_PUBLIC_TATUM_RPC_URL;
+    if (!url) return null;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "sui_getTransactionBlock",
+        params: [digest, { showObjectChanges: true }],
+      }),
+    });
+    const json = await res.json();
+    const created = json?.result?.objectChanges?.find(
+      (c: { type: string; objectType?: string }) =>
+        c.type === "created" && c.objectType?.endsWith("::vault::Capsule"),
+    );
+    return created?.objectId ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function Field({
@@ -160,20 +206,44 @@ function Field({
 function StatusBanner({ status }: { status: Status }) {
   if (status.kind === "idle") return null;
 
-  const map: Record<Status["kind"], string> = {
-    idle: "",
-    encrypting: "Encrypting your file…",
-    uploading: "Uploading to Walrus…",
-    signing: "Waiting for wallet signature…",
-    done: "",
-    error: "",
-  };
-
   if (status.kind === "done") {
+    const shareUrl = status.capsuleId
+      ? `${typeof window !== "undefined" ? window.location.origin : ""}/capsule/${status.capsuleId}`
+      : null;
+
     return (
-      <p className="rounded-md bg-emerald-50 p-4 text-sm text-emerald-800">
-        Capsule sealed! Tx digest: <code>{status.digest}</code>
-      </p>
+      <div className="space-y-3 rounded-md bg-emerald-50 p-4 text-sm text-emerald-900">
+        <p className="font-medium">Capsule sealed! 🔐</p>
+        <p>
+          Tx digest: <code className="break-all">{status.digest}</code>
+        </p>
+        {shareUrl && status.capsuleId && (
+          <div className="space-y-2 border-t border-emerald-200 pt-3">
+            <p className="font-medium">Share this capsule:</p>
+            <div className="flex flex-wrap gap-2">
+              <input
+                readOnly
+                value={shareUrl}
+                onClick={(e) => (e.target as HTMLInputElement).select()}
+                className="flex-1 rounded border border-emerald-200 bg-white px-2 py-1 font-mono text-xs"
+              />
+              <button
+                type="button"
+                onClick={() => navigator.clipboard.writeText(shareUrl)}
+                className="rounded border border-emerald-300 bg-white px-3 py-1 text-xs hover:bg-emerald-100"
+              >
+                Copy
+              </button>
+              <Link
+                href={`/capsule/${status.capsuleId}`}
+                className="rounded bg-emerald-600 px-3 py-1 text-xs text-white hover:bg-emerald-700"
+              >
+                Open →
+              </Link>
+            </div>
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -185,9 +255,15 @@ function StatusBanner({ status }: { status: Status }) {
     );
   }
 
+  const messages: Record<Exclude<Status["kind"], "idle" | "done" | "error">, string> = {
+    encrypting: "Encrypting your file…",
+    uploading: "Uploading to Walrus…",
+    signing: "Waiting for wallet signature…",
+  };
+
   return (
     <p className="rounded-md bg-blue-50 p-4 text-sm text-blue-800">
-      {map[status.kind]}
+      {messages[status.kind]}
     </p>
   );
 }

@@ -86,7 +86,8 @@ export default function CapsulePage({ params }: { params: { id: string } }) {
       // 3. Decrypt locally and surface as a downloadable Blob.
       const key = await importKey(new Uint8Array(capsule.encryptedKey));
       const plain = await decrypt(key, cipherBytes);
-      setDecryptedBlob(new Blob([plain]));
+      // Cast: same Uint8Array<ArrayBufferLike> issue as in lib/walrus.ts.
+      setDecryptedBlob(new Blob([plain as BlobPart]));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

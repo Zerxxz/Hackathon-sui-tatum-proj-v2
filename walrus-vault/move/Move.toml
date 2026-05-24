@@ -6,5 +6,8 @@ version = "0.1.0"
 [dependencies]
 Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/mainnet" }
 
+[dev-dependencies]
+# (Sui already pulled in above is enough for tests.)
+
 [addresses]
 walrus_vault = "0x0"

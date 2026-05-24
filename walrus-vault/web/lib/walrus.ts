@@ -24,9 +24,11 @@ export async function storeBlob(
   epochs: number = config.walrus.defaultEpochs,
 ): Promise<StoreResult> {
   const url = `${config.walrus.publisher}/v1/blobs?epochs=${epochs}`;
+  // Cast: the body must be ArrayBuffer-backed; a Uint8Array view is fine
+  // at runtime but `fetch`'s typings reject `Uint8Array<ArrayBufferLike>`.
   const res = await fetch(url, {
     method: "PUT",
-    body: data,
+    body: data as BodyInit,
   });
 
   if (!res.ok) {
