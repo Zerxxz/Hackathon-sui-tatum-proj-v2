@@ -1,16 +1,14 @@
 "use client";
 
-// Lists every Capsule owned by the connected wallet.
-//
-// We rely on Sui's getOwnedObjects with a StructType filter so the RPC
-// only returns objects of our Capsule type. The package id comes from
-// NEXT_PUBLIC_VAULT_PACKAGE_ID, so make sure to publish the Move package
-// and set that env var before this page becomes useful.
-
 import { useCurrentAccount, useSuiClient } from "@mysten/dapp-kit";
+import clsx from "clsx";
+import { motion } from "framer-motion";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { CountdownTimer } from "@/components/CountdownTimer";
+
+// Lists every Capsule owned by the connected wallet, rendered as glass
+// cards with hover glow. Falls back to skeletons while loading.
 
 type CapsuleSummary = {
   id: string;
@@ -62,12 +60,7 @@ export function CapsuleList() {
           });
         }
 
-        // Sort: unlocked first, then by soonest unlock time.
-        list.sort((a, b) => {
-          if (a.unlocked !== b.unlocked) return a.unlocked ? -1 : 1;
-          return a.unlockAtMs - b.unlockAtMs;
-        });
-
+        list.sort((a, b) => a.unlockAtMs - b.unlockAtMs);
         setItems(list);
       } catch (err) {
         if (!cancelled) {
@@ -83,27 +76,28 @@ export function CapsuleList() {
 
   if (!account) {
     return (
-      <p className="rounded-lg border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">
-        Connect your wallet to see your capsules.
-      </p>
+      <EmptyState
+        title="Connect your wallet"
+        body="Once connected, your sealed capsules will show up here."
+      />
     );
   }
 
   if (error) {
     return (
-      <p className="rounded-lg bg-red-50 p-4 text-sm text-red-800">
-        Couldn&apos;t load capsules: {error}
+      <p className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
+        Couldn't load capsules: {error}
       </p>
     );
   }
 
   if (items === null) {
     return (
-      <ul className="space-y-3">
-        {[0, 1, 2].map((i) => (
+      <ul className="grid gap-3 sm:grid-cols-2">
+        {[0, 1, 2, 3].map((i) => (
           <li
             key={i}
-            className="h-20 animate-pulse rounded-lg border border-gray-200 bg-gray-50"
+            className="h-28 animate-pulse rounded-2xl border border-white/5 shimmer"
           />
         ))}
       </ul>
@@ -112,40 +106,111 @@ export function CapsuleList() {
 
   if (items.length === 0) {
     return (
-      <p className="rounded-lg border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">
-        No capsules yet. <Link href="/create" className="text-ocean-600 underline">Create your first one →</Link>
-      </p>
+      <EmptyState
+        title="No capsules yet"
+        body={
+          <>
+            Sealed time is just one click away.{" "}
+            <Link href="/create" className="text-cyan-300 hover:text-cyan-200">
+              Create your first one →
+            </Link>
+          </>
+        }
+      />
     );
   }
 
   return (
-    <ul className="space-y-3">
-      {items.map((c) => (
-        <li
-          key={c.id}
-          className="rounded-lg border border-gray-200 p-4 transition hover:border-ocean-500 hover:shadow-sm"
-        >
-          <Link href={`/capsule/${c.id}`} className="block">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-medium">{c.title}</p>
-                <p className="mt-1 break-all font-mono text-xs text-gray-500">
-                  {c.id}
-                </p>
+    <motion.ul
+      initial="hidden"
+      animate="show"
+      variants={{
+        hidden: {},
+        show: { transition: { staggerChildren: 0.06 } },
+      }}
+      className="grid gap-3 sm:grid-cols-2"
+    >
+      {items.map((c) => {
+        const ready = Date.now() >= c.unlockAtMs;
+        return (
+          <motion.li
+            key={c.id}
+            variants={{
+              hidden: { opacity: 0, y: 12 },
+              show: { opacity: 1, y: 0 },
+            }}
+            transition={{ duration: 0.4, ease: "easeOut" }}
+          >
+            <Link
+              href={`/capsule/${c.id}`}
+              className={clsx(
+                "group block h-full rounded-2xl border border-white/10 bg-white/[0.03] p-5 backdrop-blur-xl transition gradient-border",
+                "hover:border-white/20 hover:bg-white/[0.05]",
+              )}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium">{c.title}</p>
+                  <p className="mt-1 truncate font-mono text-[10px] text-white/40">
+                    {c.id}
+                  </p>
+                </div>
+                <StatusPill unlocked={c.unlocked} ready={ready} />
               </div>
-              <div className="text-right text-sm">
-                {c.unlocked ? (
-                  <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-800">
-                    Unlocked
-                  </span>
-                ) : (
-                  <CountdownTimer targetMs={c.unlockAtMs} />
-                )}
+
+              <div className="mt-4 flex items-center justify-between">
+                <CountdownTimer targetMs={c.unlockAtMs} variant="compact" />
+                <span className="text-xs text-white/40 transition group-hover:translate-x-0.5 group-hover:text-cyan-300">
+                  Open →
+                </span>
               </div>
-            </div>
-          </Link>
-        </li>
-      ))}
-    </ul>
+            </Link>
+          </motion.li>
+        );
+      })}
+    </motion.ul>
+  );
+}
+
+function StatusPill({
+  unlocked,
+  ready,
+}: {
+  unlocked: boolean;
+  ready: boolean;
+}) {
+  if (unlocked) {
+    return (
+      <span className="rounded-full border border-emerald-400/40 bg-emerald-500/15 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-emerald-300">
+        Unlocked
+      </span>
+    );
+  }
+  if (ready) {
+    return (
+      <span className="rounded-full border border-amber-400/40 bg-amber-500/15 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-amber-300">
+        Ready
+      </span>
+    );
+  }
+  return (
+    <span className="rounded-full border border-white/15 bg-white/5 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-white/50">
+      Sealed
+    </span>
+  );
+}
+
+function EmptyState({
+  title,
+  body,
+}: {
+  title: string;
+  body: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-10 text-center">
+      <p className="font-medium">{title}</p>
+      <p className="mt-2 text-sm text-white/50">{body}</p>
+    </div>
   );
 }
